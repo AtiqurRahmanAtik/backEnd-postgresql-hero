@@ -27,6 +27,32 @@ app.post('/users', async (req, res) => {
   }
 });
 
+
+
+app.get("/users", async(req,res)=>{
+
+
+  try{
+
+    const result = await db.query("SELECT id,name, email,password FROM users ORDER BY id ASC");
+
+    res.status(200).json({message:"get all users", users:result.rows})
+  }
+
+  catch (error) {
+    console.error("Get users error:", error.message);
+
+    res.status(500).json({
+      error: "Server error while fetching users",
+    });
+  }
+  
+})
+
+
+
+
+
 app.get('/', (req, res) => {
   res.send('Hello World!');
 });
