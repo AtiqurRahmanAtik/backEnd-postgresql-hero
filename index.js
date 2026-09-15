@@ -12,18 +12,37 @@ app.use(cors());
 
 
 // create users api here
-app.post('/users', async (req, res) => {
+
+app.post("/users", async (req, res) => {
   const { name, email, password } = req.body;
+
+  
+  if (!name || !email || !password) {
+    return res.status(400).json({
+      error: "Name, email and password are required",
+    });
+  }
+
   try {
-    // $1 and $2 are parameterized queries to prevent SQL Injection
     const newUser = await db.query(
-      'INSERT INTO users (name, email,password) VALUES ($1, $2,$3) RETURNING *',
-      [name, email,password]
+      `INSERT INTO users (name, email, password)
+       VALUES ($1, $2, $3)
+       RETURNING id, name, email`,
+      [name, email, password]
     );
-    res.status(201).json(newUser.rows[0]);
+
+    res.status(201).json({
+      message: "User created successfully",
+      user: newUser.rows[0],
+    });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: 'Server Error' });
+    console.error("Create user error:", err.message);
+
+  
+
+    res.status(500).json({
+      error: "Server Error",
+    });
   }
 });
 
