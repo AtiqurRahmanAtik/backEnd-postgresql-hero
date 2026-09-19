@@ -1,3 +1,5 @@
+const authenticateUser = require("./middleware/auth");
+const authorizeRoles = require("./middleware/authorize");
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config()
@@ -5,6 +7,7 @@ const cookieParser = require("cookie-parser");
 const db = require("./db");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+
 
 
 
@@ -26,6 +29,8 @@ app.use(
 
 // create users api here
 
+const bcrypt = require("bcrypt");
+
 app.post("/users", async (req, res) => {
   const { name, email, password } = req.body;
 
@@ -36,14 +41,27 @@ app.post("/users", async (req, res) => {
   }
 
   try {
-    
+    // Check existing email
+    const existingUser = await db.query(
+      "SELECT id FROM users WHERE email = $1",
+      [email]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res.status(409).json({
+        error: "Email already exists",
+      });
+    }
+
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // Default role = User
     const newUser = await db.query(
-      `INSERT INTO users (name, email, password)
-       VALUES ($1, $2, $3)
-       RETURNING id, name, email `,
-      [name, email, hashedPassword]
+      `INSERT INTO users (name, email, password, role)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, email, role`,
+      [name, email, hashedPassword, "User"]
     );
 
     res.status(201).json({
@@ -52,13 +70,6 @@ app.post("/users", async (req, res) => {
     });
   } catch (err) {
     console.error("Create user error:", err.message);
-
-   
-    if (err.code === "23505") {
-      return res.status(409).json({
-        error: "Email already exists",
-      });
-    }
 
     res.status(500).json({
       error: "Server Error",
@@ -252,21 +263,25 @@ app.delete("/users/:id", async(req,res)=>{
 
 
 
-
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
-  // Validation
   if (!email || !password) {
     return res.status(400).json({
       error: "Email and password are required",
     });
   }
 
+  if (!process.env.JWT_SECRET) {
+    return res.status(500).json({
+      error: "JWT secret is not configured",
+    });
+  }
+
   try {
     // Find user
     const result = await db.query(
-      `SELECT id, name, email, password
+      `SELECT id, name, email, password, role
        FROM users
        WHERE email = $1`,
       [email]
@@ -274,14 +289,13 @@ app.post("/login", async (req, res) => {
 
     const user = result.rows[0];
 
-    // User not found
     if (!user) {
       return res.status(401).json({
         error: "Invalid email or password",
       });
     }
 
-    // Check password
+    // Compare password
     const isPasswordValid = await bcrypt.compare(
       password,
       user.password
@@ -293,20 +307,12 @@ app.post("/login", async (req, res) => {
       });
     }
 
-    // Check JWT secret
-    if (!process.env.JWT_SECRET) {
-      console.error("JWT_SECRET is missing");
-
-      return res.status(500).json({
-        error: "JWT secret is not configured",
-      });
-    }
-
     // Create JWT
     const token = jwt.sign(
       {
         id: user.id,
         email: user.email,
+        role: user.role,
       },
       process.env.JWT_SECRET,
       {
@@ -314,24 +320,23 @@ app.post("/login", async (req, res) => {
       }
     );
 
-    // Store JWT in cookie
+    // Store JWT in HttpOnly cookie
     res.cookie("token", token, {
       httpOnly: true,
-      secure: false,
+      secure: false, // true in production with HTTPS
       sameSite: "lax",
       maxAge: 60 * 60 * 1000,
     });
 
-    // Response
     res.status(200).json({
       message: "Login successful",
       user: {
         id: user.id,
         name: user.name,
         email: user.email,
+        role: user.role,
       },
     });
-
   } catch (err) {
     console.error("Login error:", err.message);
 
@@ -340,6 +345,63 @@ app.post("/login", async (req, res) => {
     });
   }
 });
+
+
+
+app.post("/logout", (req, res) => {
+  res.clearCookie("token", {
+    httpOnly: true,
+    secure: false,
+    sameSite: "lax",
+  });
+
+  res.status(200).json({
+    message: "Logout successful",
+  });
+});
+
+// user Dashboard
+app.get(
+  "/user-dashboard",
+  authenticateUser,
+  authorizeRoles("User"),
+  (req, res) => {
+    res.status(200).json({
+      message: "Welcome to User Dashboard",
+      user: req.user,
+    });
+  }
+);
+
+
+
+// Admin Dashboard
+app.get(
+  "/admin-dashboard",
+  authenticateUser,
+  authorizeRoles("Admin"),
+  (req, res) => {
+    res.status(200).json({
+      message: "Welcome to Admin Dashboard",
+      user: req.user,
+    });
+  }
+);
+
+
+// ShopKeeper Role
+app.get(
+  "/products/manage",
+  authenticateUser,
+  authorizeRoles("Admin", "Shopkeeper"),
+  (req, res) => {
+    res.status(200).json({
+      message: "You can manage products",
+      user: req.user,
+    });
+  }
+);
+
 
 
 
