@@ -29,8 +29,11 @@ app.use(
 
 // create users api here
 
-const bcrypt = require("bcrypt");
 
+
+
+
+// User Registration api
 app.post("/users", async (req, res) => {
   const { name, email, password } = req.body;
 
@@ -84,7 +87,7 @@ app.get("/users", async(req,res)=>{
 
   try{
 
-    const result = await db.query("SELECT id,name, email,password FROM users ORDER BY id ASC");
+    const result = await db.query("SELECT id,name, email,password,role FROM users ORDER BY id ASC");
 
     res.status(200).json({message:"get all users", users:result.rows})
   }
@@ -211,55 +214,7 @@ app.delete("/users/:id", async(req,res)=>{
 
 
 
-// login users
 
-// app.post("/users", async (req, res) => {
-//   const { name, email, password } = req.body;
-
-//   // Validation
-//   if (!name || !email || !password) {
-//     return res.status(400).json({
-//       error: "Name, email and password are required",
-//     });
-//   }
-
-//   try {
-//     // Check existing email
-//     const existingUser = await db.query(
-//       "SELECT id FROM users WHERE email = $1",
-//       [email]
-//     );
-
-//     if (existingUser.rows.length > 0) {
-//       return res.status(409).json({
-//         error: "Email already exists",
-//       });
-//     }
-
-//     // Hash password
-//     const hashedPassword = await bcrypt.hash(password, 10);
-
-//     // Insert user
-//     const newUser = await db.query(
-//       `INSERT INTO users (name, email, password)
-//        VALUES ($1, $2, $3)
-//        RETURNING id, name, email`,
-//       [name, email, hashedPassword]
-//     );
-
-//     res.status(201).json({
-//       message: "User created successfully",
-//       user: newUser.rows[0],
-//     });
-
-//   } catch (err) {
-//     console.error("Create user error:", err.message);
-
-//     res.status(500).json({
-//       error: "Server Error",
-//     });
-//   }
-// });
 
 
 
@@ -347,7 +302,7 @@ app.post("/login", async (req, res) => {
 });
 
 
-
+// Logout api
 app.post("/logout", (req, res) => {
   res.clearCookie("token", {
     httpOnly: true,
@@ -375,33 +330,615 @@ app.get(
 
 
 
+
+// {
+ 
+//              "name": "admin",
+//             "email": "admin@gmail.com",
+//             "password": "atik1234"
+            
+            
+// }
+// Create Admin Dashboard
+// app.post("/admin/create", async (req, res) => {
+//   const { name, email, password } = req.body;
+
+//   if (!name || !email || !password) {
+//     return res.status(400).json({
+//       error: "Name, email and password are required",
+//     });
+//   }
+
+//   try {
+//     // Check existing email
+//     const existingUser = await db.query(
+//       "SELECT id FROM users WHERE email = $1",
+//       [email]
+//     );
+
+//     if (existingUser.rows.length > 0) {
+//       return res.status(409).json({
+//         error: "Email already exists",
+//       });
+//     }
+
+//     // Hash password
+//     const hashedPassword = await bcrypt.hash(password, 10);
+
+//     // Create Admin
+//     const newAdmin = await db.query(
+//       `INSERT INTO users (name, email, password, role)
+//        VALUES ($1, $2, $3, $4)
+//        RETURNING id, name, email, role`,
+//       [name, email, hashedPassword, "Admin"]
+//     );
+
+//     res.status(201).json({
+//       message: "Admin created successfully",
+//       user: newAdmin.rows[0],
+//     });
+//   } catch (error) {
+//     console.error("Admin create error:", error.message);
+
+//     res.status(500).json({
+//       error: "Server Error",
+//     });
+//   }
+// });
+
+
+
 // Admin Dashboard
 app.get(
-  "/admin-dashboard",
+  "/admin/dashboard",
   authenticateUser,
   authorizeRoles("Admin"),
-  (req, res) => {
-    res.status(200).json({
-      message: "Welcome to Admin Dashboard",
-      user: req.user,
-    });
+  async (req, res) => {
+    try {
+      // Get all users
+      const result = await db.query(
+        `SELECT id, name, email, role
+         FROM users
+         ORDER BY id ASC`
+      );
+
+      res.status(200).json({
+        message: "Welcome to Admin Dashboard",
+
+        admin: req.user,
+
+        totalUsers: result.rows.length,
+
+        users: result.rows,
+      });
+    } catch (error) {
+      console.error("Admin dashboard error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+//see admin get all users 
+app.get(
+  "/admin/users",
+  authenticateUser,
+  authorizeRoles("Admin"),
+  async (req, res) => {
+    try {
+      const result = await db.query(
+        `SELECT id, name, email, role
+         FROM users
+         ORDER BY id ASC`
+      );
+
+      res.status(200).json({
+        totalUsers: result.rows.length,
+        users: result.rows,
+      });
+    } catch (error) {
+      console.error("Get users error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+// ==========================================
+// ADMIN - GET SINGLE USER DETAILS
+// ==========================================
+
+app.get(
+  "/admin/users/:id",
+  authenticateUser,
+  authorizeRoles("Admin"),
+  async (req, res) => {
+    const userId = Number(req.params.id);
+
+    // console.log("Requested User ID:", userId);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        error: "Invalid user ID",
+      });
+    }
+
+    try {
+      const result = await db.query(
+        `SELECT id, name, email, role
+         FROM users
+         WHERE id = $1`,
+        [userId]
+      );
+
+      console.log("Database result:", result.rows);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          error: "User not found",
+        });
+      }
+
+      return res.status(200).json({
+        message: "User details retrieved successfully",
+        user: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Get single user error:", error);
+
+      return res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+// admin can update users role 
+app.patch(
+  "/users/role/:id",
+  authenticateUser,
+  authorizeRoles("Admin"),
+  async (req, res) => {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    // Admin can only assign these roles
+    const allowedRoles = ["User", "Shopkeeper"];
+
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({
+        error: "Invalid role. Admin can assign User or Shopkeeper only",
+      });
+    }
+
+    try {
+      const result = await db.query(
+        `UPDATE users
+         SET role = $1
+         WHERE id = $2
+         RETURNING id, name, email, role`,
+        [role, id]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          error: "User not found",
+        });
+      }
+
+      res.status(200).json({
+        message: "User role updated successfully",
+        user: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Role update error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+// ==========================================
+// ADMIN - DELETE USER
+// ==========================================
+
+// ==========================================
+// ADMIN - DELETE USER
+// ==========================================
+
+app.delete(
+  "/admin/users/:id",
+  authenticateUser,
+  authorizeRoles("Admin"),
+  async (req, res) => {
+    const { id } = req.params;
+
+    try {
+      // Find the user first
+      const existingUser = await db.query(
+        `SELECT id, name, email, role
+         FROM users
+         WHERE id = $1`,
+        [id]
+      );
+
+      // User doesn't exist
+      if (existingUser.rows.length === 0) {
+        return res.status(404).json({
+          error: "User not found",
+        });
+      }
+
+      const user = existingUser.rows[0];
+
+      // ==========================================
+      // PREVENT ADMIN DELETION
+      // ==========================================
+
+      if (user.role === "Admin") {
+        return res.status(403).json({
+          error: "Admin users cannot be deleted",
+        });
+      }
+
+      // ==========================================
+      // DELETE USER / SHOPKEEPER
+      // ==========================================
+
+      const result = await db.query(
+        `DELETE FROM users
+         WHERE id = $1
+         RETURNING id, name, email, role`,
+        [id]
+      );
+
+      res.status(200).json({
+        message: "User deleted successfully",
+        deletedUser: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Delete user error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
   }
 );
 
 
 // ShopKeeper Role
-app.get(
-  "/products/manage",
+// ==========================================
+// SHOPKEEPER - CREATE PRODUCT
+// ==========================================
+
+app.post(
+  "/shopkeeper/products",
   authenticateUser,
-  authorizeRoles("Admin", "Shopkeeper"),
-  (req, res) => {
-    res.status(200).json({
-      message: "You can manage products",
-      user: req.user,
-    });
+  authorizeRoles("Shopkeeper"),
+  async (req, res) => {
+    const {
+      name,
+      description,
+      price,
+      stock,
+      category,
+      image_url,
+    } = req.body;
+
+    // Validation
+    if (!name || price === undefined || stock === undefined) {
+      return res.status(400).json({
+        error: "Name, price and stock are required",
+      });
+    }
+
+    if (Number(price) < 0) {
+      return res.status(400).json({
+        error: "Price cannot be negative",
+      });
+    }
+
+    if (Number(stock) < 0) {
+      return res.status(400).json({
+        error: "Stock cannot be negative",
+      });
+    }
+
+    try {
+      // Logged-in shopkeeper ID
+      const shopkeeperId = req.user.id;
+
+      const result = await db.query(
+        `INSERT INTO products
+        (
+          name,
+          description,
+          price,
+          stock,
+          category,
+          image_url,
+          shopkeeper_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *`,
+        [
+          name,
+          description || null,
+          Number(price),
+          Number(stock),
+          category || null,
+          image_url || null,
+          shopkeeperId,
+        ]
+      );
+
+      res.status(201).json({
+        message: "Product created successfully",
+        product: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Create product error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
   }
 );
 
+
+// ==========================================
+// SHOPKEEPER - GET ALL OWN PRODUCTS
+// ==========================================
+
+app.get(
+  "/shopkeeper/products",
+  authenticateUser,
+  authorizeRoles("Shopkeeper"),
+  async (req, res) => {
+    try {
+      const shopkeeperId = req.user.id;
+
+      const result = await db.query(
+        `SELECT
+          id,
+          name,
+          description,
+          price,
+          stock,
+          category,
+          image_url,
+          shopkeeper_id,
+          created_at,
+          updated_at
+        FROM products
+        WHERE shopkeeper_id = $1
+        ORDER BY id DESC`,
+        [shopkeeperId]
+      );
+
+      res.status(200).json({
+        totalProducts: result.rows.length,
+        products: result.rows,
+      });
+    } catch (error) {
+      console.error("Get products error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+// ==========================================
+// SHOPKEEPER - GET SINGLE PRODUCT
+// ==========================================
+
+app.get(
+  "/shopkeeper/products/:id",
+  authenticateUser,
+  authorizeRoles("Shopkeeper"),
+  async (req, res) => {
+    const productId = Number(req.params.id);
+
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({
+        error: "Invalid product ID",
+      });
+    }
+
+    try {
+      const shopkeeperId = req.user.id;
+
+      const result = await db.query(
+        `SELECT
+          id,
+          name,
+          description,
+          price,
+          stock,
+          category,
+          image_url,
+          shopkeeper_id,
+          created_at,
+          updated_at
+        FROM products
+        WHERE id = $1
+        AND shopkeeper_id = $2`,
+        [productId, shopkeeperId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          error: "Product not found",
+        });
+      }
+
+      res.status(200).json({
+        message: "Product retrieved successfully",
+        product: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Get single product error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+
+// ==========================================
+// SHOPKEEPER - UPDATE PRODUCT
+// ==========================================
+
+app.patch(
+  "/shopkeeper/products/:id",
+  authenticateUser,
+  authorizeRoles("Shopkeeper"),
+  async (req, res) => {
+    const productId = Number(req.params.id);
+
+    const {
+      name,
+      description,
+      price,
+      stock,
+      category,
+      image_url,
+    } = req.body;
+
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({
+        error: "Invalid product ID",
+      });
+    }
+
+    try {
+      const shopkeeperId = req.user.id;
+
+      // Check product ownership
+      const existingProduct = await db.query(
+        `SELECT id
+         FROM products
+         WHERE id = $1
+         AND shopkeeper_id = $2`,
+        [productId, shopkeeperId]
+      );
+
+      if (existingProduct.rows.length === 0) {
+        return res.status(404).json({
+          error: "Product not found",
+        });
+      }
+
+      const result = await db.query(
+        `UPDATE products
+         SET
+           name = COALESCE($1, name),
+           description = COALESCE($2, description),
+           price = COALESCE($3, price),
+           stock = COALESCE($4, stock),
+           category = COALESCE($5, category),
+           image_url = COALESCE($6, image_url),
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = $7
+         AND shopkeeper_id = $8
+         RETURNING *`,
+        [
+          name ?? null,
+          description ?? null,
+          price !== undefined ? Number(price) : null,
+          stock !== undefined ? Number(stock) : null,
+          category ?? null,
+          image_url ?? null,
+          productId,
+          shopkeeperId,
+        ]
+      );
+
+      res.status(200).json({
+        message: "Product updated successfully",
+        product: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Update product error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+// ==========================================
+// SHOPKEEPER - DELETE PRODUCT
+// ==========================================
+
+app.delete(
+  "/shopkeeper/products/:id",
+  authenticateUser,
+  authorizeRoles("Shopkeeper"),
+  async (req, res) => {
+    const productId = Number(req.params.id);
+
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({
+        error: "Invalid product ID",
+      });
+    }
+
+    try {
+      const shopkeeperId = req.user.id;
+
+      const result = await db.query(
+        `DELETE FROM products
+         WHERE id = $1
+         AND shopkeeper_id = $2
+         RETURNING id, name, price, stock, category`,
+        [productId, shopkeeperId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          error: "Product not found",
+        });
+      }
+
+      res.status(200).json({
+        message: "Product deleted successfully",
+        deletedProduct: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Delete product error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
 
 
 
