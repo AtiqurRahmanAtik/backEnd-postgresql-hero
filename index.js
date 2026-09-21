@@ -216,7 +216,13 @@ app.delete("/users/:id", async(req,res)=>{
 
 
 
+// normanl user login 
+// {
+  
+//    "email": "tanvirhllekdtir80@gmail.com",
+//    "password": "atik3333"
 
+// }
 
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
@@ -839,8 +845,156 @@ app.get(
 
 
 
+// ==========================================
+// SHOPKEEPER - UPDATE PRODUCT
+// ==========================================
 
-// Addto Cart Products api
+app.patch(
+  "/shopkeeper/products/:id",
+  authenticateUser,
+  authorizeRoles("Shopkeeper"),
+  async (req, res) => {
+    const productId = Number(req.params.id);
+
+    const {
+      name,
+      description,
+      price,
+      stock,
+      category,
+      image_url,
+    } = req.body;
+
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({
+        error: "Invalid product ID",
+      });
+    }
+
+    try {
+      const shopkeeperId = req.user.id;
+
+      // Check product ownership
+      const existingProduct = await db.query(
+        `SELECT id
+         FROM products
+         WHERE id = $1
+         AND shopkeeper_id = $2`,
+        [productId, shopkeeperId]
+      );
+
+      if (existingProduct.rows.length === 0) {
+        return res.status(404).json({
+          error: "Product not found",
+        });
+      }
+
+      const result = await db.query(
+        `UPDATE products
+         SET
+           name = COALESCE($1, name),
+           description = COALESCE($2, description),
+           price = COALESCE($3, price),
+           stock = COALESCE($4, stock),
+           category = COALESCE($5, category),
+           image_url = COALESCE($6, image_url),
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = $7
+         AND shopkeeper_id = $8
+         RETURNING *`,
+        [
+          name ?? null,
+          description ?? null,
+          price !== undefined ? Number(price) : null,
+          stock !== undefined ? Number(stock) : null,
+          category ?? null,
+          image_url ?? null,
+          productId,
+          shopkeeperId,
+        ]
+      );
+
+      res.status(200).json({
+        message: "Product updated successfully",
+        product: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Update product error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+
+
+// ==========================================
+// SHOPKEEPER - DELETE PRODUCT
+// ==========================================
+
+app.delete(
+  "/shopkeeper/products/:id",
+  authenticateUser,
+  authorizeRoles("Shopkeeper"),
+  async (req, res) => {
+    const productId = Number(req.params.id);
+
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({
+        error: "Invalid product ID",
+      });
+    }
+
+    try {
+      const shopkeeperId = req.user.id;
+
+      const result = await db.query(
+        `DELETE FROM products
+         WHERE id = $1
+         AND shopkeeper_id = $2
+         RETURNING id, name, price, stock, category`,
+        [productId, shopkeeperId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          error: "Product not found",
+        });
+      }
+
+      res.status(200).json({
+        message: "Product deleted successfully",
+        deletedProduct: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Delete product error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+
+
+// 
+// Method	Endpoint	Purpose	Login
+// POST	/cart	Add product	✅
+// GET	/cart	Show user's cart	✅
+// PATCH	/cart/:cartItemId	Update quantity	✅
+// DELETE	/cart/:cartItemId	Remove item	✅
+// DELETE	/cart	Clear cart	✅
+
+
+
+// Add to Cart Products api
 app.post(
   "/cart",
   authenticateUser,
@@ -1211,7 +1365,7 @@ app.delete(
 
 
 
-// Clear Entire Cart
+// Clear all Entire Cart
 
 app.delete(
   "/cart",
@@ -1247,91 +1401,681 @@ app.delete(
 
 
 
-// 
-// Method	Endpoint	Purpose	Login
-// POST	/cart	Add product	✅
-// GET	/cart	Show user's cart	✅
-// PATCH	/cart/:cartItemId	Update quantity	✅
-// DELETE	/cart/:cartItemId	Remove item	✅
-// DELETE	/cart	Clear cart	✅
+
+
+// | Method   | Endpoint              | Purpose                |
+// | -------- | --------------------- | ---------------------- |
+// | `GET`    | `/products`           | All products           |
+// | `GET`    | `/products/:id`       | Product details        |
+// | `POST`   | `/cart`               | Add to cart            |
+// | `GET`    | `/cart`               | Show cart              |
+// | `PATCH`  | `/cart/:cartItemId`   | Update cart quantity   |
+// | `DELETE` | `/cart/:cartItemId`   | Remove cart item       |
+// | `DELETE` | `/cart`               | Clear cart             |
+// | `POST`   | `/checkout`           | Create order from cart |
+// | `PATCH`  | `/orders/:id/confirm` | Confirm order          |
+// | `GET`    | `/orders`             | User's order history   |
+// | `GET`    | `/orders/:id`         | Single order details   |
+
+
+// login user checkout api
+app.post(
+  "/checkout",
+  authenticateUser,
+  async (req, res) => {
+    const {
+      shippingName,
+      shippingPhone,
+      shippingAddress,
+    } = req.body;
+
+    if (
+      !shippingName ||
+      !shippingPhone ||
+      !shippingAddress
+    ) {
+      return res.status(400).json({
+        error:
+          "Shipping name, phone and address are required",
+      });
+    }
+
+    const client = await db.connect();
+
+    try {
+      const userId = req.user.id;
+
+      await client.query("BEGIN");
+
+      // --------------------------------
+      // 1. Find user's cart
+      // --------------------------------
+      const cartResult = await client.query(
+        `SELECT id
+         FROM carts
+         WHERE user_id = $1`,
+        [userId]
+      );
+
+      if (cartResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+
+        return res.status(400).json({
+          error: "Your cart is empty",
+        });
+      }
+
+      const cartId = cartResult.rows[0].id;
+
+      // --------------------------------
+      // 2. Get cart items + lock products
+      // --------------------------------
+      const cartItemsResult = await client.query(
+        `SELECT
+          ci.id AS cart_item_id,
+          ci.product_id,
+          ci.quantity,
+          p.name,
+          p.price,
+          p.stock,
+          p.image_url
+
+         FROM cart_items ci
+
+         JOIN products p
+           ON ci.product_id = p.id
+
+         WHERE ci.cart_id = $1
+
+         FOR UPDATE`,
+        [cartId]
+      );
+
+      if (cartItemsResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+
+        return res.status(400).json({
+          error: "Your cart is empty",
+        });
+      }
+
+      const cartItems = cartItemsResult.rows;
+
+      let totalAmount = 0;
+
+      // --------------------------------
+      // 3. Check stock
+      // --------------------------------
+      for (const item of cartItems) {
+        if (item.stock <= 0) {
+          await client.query("ROLLBACK");
+
+          return res.status(400).json({
+            error: `${item.name} is out of stock`,
+          });
+        }
+
+        if (item.quantity > item.stock) {
+          await client.query("ROLLBACK");
+
+          return res.status(400).json({
+            error:
+              `Only ${item.stock} ${item.name} available in stock`,
+          });
+        }
+
+        const subtotal =
+          Number(item.price) *
+          Number(item.quantity);
+
+        totalAmount += subtotal;
+      }
+
+      // --------------------------------
+      // 4. Create order
+      // --------------------------------
+      const orderResult = await client.query(
+        `INSERT INTO orders
+        (
+          user_id,
+          total_amount,
+          status,
+          payment_method,
+          shipping_name,
+          shipping_phone,
+          shipping_address
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+
+        RETURNING *`,
+        [
+          userId,
+          totalAmount,
+          "Pending",
+          "COD",
+          shippingName,
+          shippingPhone,
+          shippingAddress,
+        ]
+      );
+
+      const order = orderResult.rows[0];
+
+      // --------------------------------
+      // 5. Create order items
+      // --------------------------------
+      for (const item of cartItems) {
+        const subtotal =
+          Number(item.price) *
+          Number(item.quantity);
+
+        await client.query(
+          `INSERT INTO order_items
+          (
+            order_id,
+            product_id,
+            product_name,
+            product_price,
+            quantity,
+            subtotal
+          )
+          VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            order.id,
+            item.product_id,
+            item.name,
+            item.price,
+            item.quantity,
+            subtotal,
+          ]
+        );
+
+        // --------------------------------
+        // 6. Deduct stock
+        // --------------------------------
+        await client.query(
+          `UPDATE products
+           SET
+             stock = stock - $1,
+             updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2`,
+          [
+            item.quantity,
+            item.product_id,
+          ]
+        );
+      }
+
+      // --------------------------------
+      // 7. Clear cart
+      // --------------------------------
+      await client.query(
+        `DELETE FROM cart_items
+         WHERE cart_id = $1`,
+        [cartId]
+      );
+
+      // --------------------------------
+      // 8. Commit
+      // --------------------------------
+      await client.query("COMMIT");
+
+      res.status(201).json({
+        message: "Checkout successful",
+
+        order: {
+          id: order.id,
+          totalAmount: order.total_amount,
+          status: order.status,
+          paymentMethod: order.payment_method,
+          shippingName: order.shipping_name,
+          shippingPhone: order.shipping_phone,
+          shippingAddress: order.shipping_address,
+          createdAt: order.created_at,
+        },
+      });
+
+    } catch (error) {
+      await client.query("ROLLBACK");
+
+      console.error(
+        "Checkout error:",
+        error.message
+      );
+
+      res.status(500).json({
+        error: "Checkout failed",
+      });
+
+    } finally {
+      client.release();
+    }
+  }
+);
 
 
 
-// ==========================================
-// SHOPKEEPER - UPDATE PRODUCT
-// ==========================================
 
+// Create order from cart 
+// order confirm api 
 app.patch(
-  "/shopkeeper/products/:id",
+  "/orders/:id/confirm",
+  authenticateUser,
+  async (req, res) => {
+    const orderId = Number(req.params.id);
+
+    if (
+      !Number.isInteger(orderId) ||
+      orderId <= 0
+    ) {
+      return res.status(400).json({
+        error: "Invalid order ID",
+      });
+    }
+
+    try {
+      const userId = req.user.id;
+
+      const result = await db.query(
+        `UPDATE orders
+         SET
+           status = 'Confirmed',
+           updated_at = CURRENT_TIMESTAMP
+
+         WHERE id = $1
+         AND user_id = $2
+         AND status = 'Pending'
+
+         RETURNING *`,
+        [
+          orderId,
+          userId,
+        ]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          error:
+            "Order not found or order cannot be confirmed",
+        });
+      }
+
+      res.status(200).json({
+        message:
+          "Order confirmed successfully",
+
+        order: result.rows[0],
+      });
+
+    } catch (error) {
+      console.error(
+        "Confirm order error:",
+        error.message
+      );
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+// see all orders api
+app.get(
+  "/orders",
+  authenticateUser,
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+
+      const result = await db.query(
+        `SELECT
+          id,
+          total_amount,
+          status,
+          payment_method,
+          shipping_name,
+          shipping_phone,
+          shipping_address,
+          created_at,
+          updated_at
+        FROM orders
+        WHERE user_id = $1
+        ORDER BY id DESC`,
+        [userId]
+      );
+
+      res.status(200).json({
+        totalOrders: result.rows.length,
+        orders: result.rows,
+      });
+    } catch (error) {
+      console.error(
+        "Get orders error:",
+        error.message
+      );
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+app.get(
+  "/orders/:id",
+  authenticateUser,
+  async (req, res) => {
+    const orderId = Number(req.params.id);
+
+    if (
+      !Number.isInteger(orderId) ||
+      orderId <= 0
+    ) {
+      return res.status(400).json({
+        error: "Invalid order ID",
+      });
+    }
+
+    try {
+      const userId = req.user.id;
+
+      const orderResult = await db.query(
+        `SELECT
+          id,
+          total_amount,
+          status,
+          payment_method,
+          shipping_name,
+          shipping_phone,
+          shipping_address,
+          created_at,
+          updated_at
+        FROM orders
+        WHERE id = $1
+        AND user_id = $2`,
+        [orderId, userId]
+      );
+
+      if (orderResult.rows.length === 0) {
+        return res.status(404).json({
+          error: "Order not found",
+        });
+      }
+
+      const itemsResult = await db.query(
+        `SELECT
+          id,
+          product_id,
+          product_name,
+          product_price,
+          quantity,
+          subtotal,
+          created_at
+        FROM order_items
+        WHERE order_id = $1
+        ORDER BY id ASC`,
+        [orderId]
+      );
+
+      res.status(200).json({
+        message: "Order retrieved successfully",
+
+        order: orderResult.rows[0],
+
+        items: itemsResult.rows,
+      });
+    } catch (error) {
+      console.error(
+        "Get single order error:",
+        error.message
+      );
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+  
+
+// Shopkeeper Order Dashboard Oparation 
+// | Method | Endpoint                        | Purpose                |
+// | ------ | ------------------------------- | ---------------------- |
+// | GET    | `/shopkeeper/dashboard`         | Dashboard statistics   |
+// | GET    | `/shopkeeper/orders`            | All relevant orders    |
+// | GET    | `/shopkeeper/orders/:id`        | Order details          |
+// | PATCH  | `/shopkeeper/orders/:id/status` | Change status          |
+// | PATCH  | `/shopkeeper/orders/:id/cancel` | Cancel + restore stock |
+
+
+
+
+app.get(
+  "/shopkeeper/dashboard",
   authenticateUser,
   authorizeRoles("Shopkeeper"),
   async (req, res) => {
-    const productId = Number(req.params.id);
+    try {
+      const shopkeeperId = req.user.id;
 
-    const {
-      name,
-      description,
-      price,
-      stock,
-      category,
-      image_url,
-    } = req.body;
+      // Total products
+      const productsResult = await db.query(
+        `SELECT COUNT(*) AS total_products
+         FROM products
+         WHERE shopkeeper_id = $1`,
+        [shopkeeperId]
+      );
 
-    if (!Number.isInteger(productId) || productId <= 0) {
+      // Total orders containing shopkeeper products
+      const ordersResult = await db.query(
+        `SELECT COUNT(DISTINCT oi.order_id) AS total_orders
+         FROM order_items oi
+         JOIN products p
+           ON oi.product_id = p.id
+         WHERE p.shopkeeper_id = $1`,
+        [shopkeeperId]
+      );
+
+      // Pending orders
+      const pendingResult = await db.query(
+        `SELECT COUNT(DISTINCT oi.order_id) AS pending_orders
+         FROM order_items oi
+         JOIN products p
+           ON oi.product_id = p.id
+         JOIN orders o
+           ON oi.order_id = o.id
+         WHERE p.shopkeeper_id = $1
+         AND o.status = 'Pending'`,
+        [shopkeeperId]
+      );
+
+      // Confirmed orders
+      const confirmedResult = await db.query(
+        `SELECT COUNT(DISTINCT oi.order_id) AS confirmed_orders
+         FROM order_items oi
+         JOIN products p
+           ON oi.product_id = p.id
+         JOIN orders o
+           ON oi.order_id = o.id
+         WHERE p.shopkeeper_id = $1
+         AND o.status = 'Confirmed'`,
+        [shopkeeperId]
+      );
+
+      // Delivered orders
+      const deliveredResult = await db.query(
+        `SELECT COUNT(DISTINCT oi.order_id) AS delivered_orders
+         FROM order_items oi
+         JOIN products p
+           ON oi.product_id = p.id
+         JOIN orders o
+           ON oi.order_id = o.id
+         WHERE p.shopkeeper_id = $1
+         AND o.status = 'Delivered'`,
+        [shopkeeperId]
+      );
+
+      // Shopkeeper's sales amount
+      const salesResult = await db.query(
+        `SELECT COALESCE(SUM(oi.subtotal), 0) AS total_sales
+         FROM order_items oi
+         JOIN products p
+           ON oi.product_id = p.id
+         JOIN orders o
+           ON oi.order_id = o.id
+         WHERE p.shopkeeper_id = $1
+         AND o.status = 'Delivered'`,
+        [shopkeeperId]
+      );
+
+      res.status(200).json({
+        message: "Shopkeeper dashboard retrieved successfully",
+
+        dashboard: {
+          totalProducts: Number(
+            productsResult.rows[0].total_products
+          ),
+
+          totalOrders: Number(
+            ordersResult.rows[0].total_orders
+          ),
+
+          pendingOrders: Number(
+            pendingResult.rows[0].pending_orders
+          ),
+
+          confirmedOrders: Number(
+            confirmedResult.rows[0].confirmed_orders
+          ),
+
+          deliveredOrders: Number(
+            deliveredResult.rows[0].delivered_orders
+          ),
+
+          totalSales: Number(
+            salesResult.rows[0].total_sales
+          ).toFixed(2),
+        },
+      });
+    } catch (error) {
+      console.error(
+        "Shopkeeper dashboard error:",
+        error.message
+      );
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+// shopkeeper can see single orders
+app.get(
+  "/shopkeeper/orders/:id",
+  authenticateUser,
+  authorizeRoles("Shopkeeper"),
+  async (req, res) => {
+    const orderId = Number(req.params.id);
+
+    if (
+      !Number.isInteger(orderId) ||
+      orderId <= 0
+    ) {
       return res.status(400).json({
-        error: "Invalid product ID",
+        error: "Invalid order ID",
       });
     }
 
     try {
       const shopkeeperId = req.user.id;
 
-      // Check product ownership
-      const existingProduct = await db.query(
-        `SELECT id
-         FROM products
-         WHERE id = $1
-         AND shopkeeper_id = $2`,
-        [productId, shopkeeperId]
+      // Get order
+      const orderResult = await db.query(
+        `SELECT DISTINCT
+          o.id,
+          o.user_id,
+          u.name AS customer_name,
+          u.email AS customer_email,
+          o.total_amount,
+          o.status,
+          o.payment_method,
+          o.shipping_name,
+          o.shipping_phone,
+          o.shipping_address,
+          o.created_at,
+          o.updated_at
+         FROM orders o
+
+         JOIN users u
+           ON o.user_id = u.id
+
+         JOIN order_items oi
+           ON o.id = oi.order_id
+
+         JOIN products p
+           ON oi.product_id = p.id
+
+         WHERE o.id = $1
+         AND p.shopkeeper_id = $2`,
+        [
+          orderId,
+          shopkeeperId,
+        ]
       );
 
-      if (existingProduct.rows.length === 0) {
+      if (orderResult.rows.length === 0) {
         return res.status(404).json({
-          error: "Product not found",
+          error:
+            "Order not found or you do not have access to this order",
         });
       }
 
-      const result = await db.query(
-        `UPDATE products
-         SET
-           name = COALESCE($1, name),
-           description = COALESCE($2, description),
-           price = COALESCE($3, price),
-           stock = COALESCE($4, stock),
-           category = COALESCE($5, category),
-           image_url = COALESCE($6, image_url),
-           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $7
-         AND shopkeeper_id = $8
-         RETURNING *`,
+      // Get only this shopkeeper's products
+      const itemsResult = await db.query(
+        `SELECT
+          oi.id,
+          oi.product_id,
+          oi.product_name,
+          oi.product_price,
+          oi.quantity,
+          oi.subtotal,
+          oi.created_at
+         FROM order_items oi
+
+         JOIN products p
+           ON oi.product_id = p.id
+
+         WHERE oi.order_id = $1
+         AND p.shopkeeper_id = $2
+
+         ORDER BY oi.id ASC`,
         [
-          name ?? null,
-          description ?? null,
-          price !== undefined ? Number(price) : null,
-          stock !== undefined ? Number(stock) : null,
-          category ?? null,
-          image_url ?? null,
-          productId,
+          orderId,
           shopkeeperId,
         ]
       );
 
       res.status(200).json({
-        message: "Product updated successfully",
-        product: result.rows[0],
+        message: "Order retrieved successfully",
+
+        order: orderResult.rows[0],
+
+        items: itemsResult.rows,
       });
     } catch (error) {
-      console.error("Update product error:", error.message);
+      console.error(
+        "Shopkeeper single order error:",
+        error.message
+      );
 
       res.status(500).json({
         error: "Server Error",
@@ -1342,46 +2086,143 @@ app.patch(
 
 
 
-// ==========================================
-// SHOPKEEPER - DELETE PRODUCT
-// ==========================================
 
-app.delete(
-  "/shopkeeper/products/:id",
+// shopkeeper update order status 
+app.patch(
+  "/shopkeeper/orders/:id/status",
   authenticateUser,
   authorizeRoles("Shopkeeper"),
   async (req, res) => {
-    const productId = Number(req.params.id);
+    const orderId = Number(req.params.id);
 
-    if (!Number.isInteger(productId) || productId <= 0) {
+    const { status } = req.body;
+
+    if (
+      !Number.isInteger(orderId) ||
+      orderId <= 0
+    ) {
       return res.status(400).json({
-        error: "Invalid product ID",
+        error: "Invalid order ID",
       });
     }
+
+    const statusFlow = {
+      Pending: [
+        "Confirmed",
+        "Cancelled",
+      ],
+
+      Confirmed: [
+        "Processing",
+        "Cancelled",
+      ],
+
+      Processing: [
+        "Shipped",
+      ],
+
+      Shipped: [
+        "Delivered",
+      ],
+
+      Delivered: [],
+
+      Cancelled: [],
+    };
 
     try {
       const shopkeeperId = req.user.id;
 
-      const result = await db.query(
-        `DELETE FROM products
-         WHERE id = $1
-         AND shopkeeper_id = $2
-         RETURNING id, name, price, stock, category`,
-        [productId, shopkeeperId]
+      // Find order
+      const orderResult = await db.query(
+        `SELECT DISTINCT
+          o.id,
+          o.status
+
+         FROM orders o
+
+         JOIN order_items oi
+           ON o.id = oi.order_id
+
+         JOIN products p
+           ON oi.product_id = p.id
+
+         WHERE o.id = $1
+         AND p.shopkeeper_id = $2`,
+        [
+          orderId,
+          shopkeeperId,
+        ]
       );
 
-      if (result.rows.length === 0) {
+      if (orderResult.rows.length === 0) {
         return res.status(404).json({
-          error: "Product not found",
+          error:
+            "Order not found or you do not have access to this order",
         });
       }
 
+      const currentStatus =
+        orderResult.rows[0].status;
+
+      const allowedStatuses =
+        statusFlow[currentStatus] || [];
+
+      // Check status value
+      if (!statusFlow.hasOwnProperty(status)) {
+        return res.status(400).json({
+          error:
+            "Invalid order status",
+        });
+      }
+
+      // Check transition
+      if (
+        !allowedStatuses.includes(status)
+      ) {
+        return res.status(400).json({
+          error:
+            `Order cannot change from ${currentStatus} to ${status}`,
+        });
+      }
+
+      // If cancelling, use dedicated cancellation API
+      if (status === "Cancelled") {
+        return res.status(400).json({
+          error:
+            "Use /shopkeeper/orders/:id/cancel to cancel an order",
+        });
+      }
+
+      // Update status
+      const result = await db.query(
+        `UPDATE orders
+         SET
+           status = $1,
+           updated_at = CURRENT_TIMESTAMP
+
+         WHERE id = $2
+
+         RETURNING *`,
+        [
+          status,
+          orderId,
+        ]
+      );
+
       res.status(200).json({
-        message: "Product deleted successfully",
-        deletedProduct: result.rows[0],
+        message:
+          "Order status updated successfully",
+
+        order:
+          result.rows[0],
       });
+
     } catch (error) {
-      console.error("Delete product error:", error.message);
+      console.error(
+        "Shopkeeper status update error:",
+        error.message
+      );
 
       res.status(500).json({
         error: "Server Error",
@@ -1389,6 +2230,355 @@ app.delete(
     }
   }
 );
+
+
+
+// Shopkeeper Cancel Order
+app.patch(
+  "/shopkeeper/orders/:id/cancel",
+  authenticateUser,
+  authorizeRoles("Shopkeeper"),
+  async (req, res) => {
+    const orderId = Number(req.params.id);
+
+    if (
+      !Number.isInteger(orderId) ||
+      orderId <= 0
+    ) {
+      return res.status(400).json({
+        error: "Invalid order ID",
+      });
+    }
+
+    const client = await db.connect();
+
+    try {
+      const shopkeeperId = req.user.id;
+
+      await client.query("BEGIN");
+
+      // --------------------------------
+      // 1. Check order belongs to shopkeeper
+      // --------------------------------
+      const orderResult = await client.query(
+        `SELECT DISTINCT
+          o.id,
+          o.status
+
+         FROM orders o
+
+         JOIN order_items oi
+           ON o.id = oi.order_id
+
+         JOIN products p
+           ON oi.product_id = p.id
+
+         WHERE o.id = $1
+         AND p.shopkeeper_id = $2
+
+         FOR UPDATE`,
+        [
+          orderId,
+          shopkeeperId,
+        ]
+      );
+
+      if (orderResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+
+        return res.status(404).json({
+          error:
+            "Order not found or you do not have access to this order",
+        });
+      }
+
+      const order =
+        orderResult.rows[0];
+
+      // --------------------------------
+      // 2. Check current status
+      // --------------------------------
+      if (
+        order.status === "Delivered"
+      ) {
+        await client.query("ROLLBACK");
+
+        return res.status(400).json({
+          error:
+            "Delivered order cannot be cancelled",
+        });
+      }
+
+      if (
+        order.status === "Cancelled"
+      ) {
+        await client.query("ROLLBACK");
+
+        return res.status(400).json({
+          error:
+            "Order is already cancelled",
+        });
+      }
+
+      // --------------------------------
+      // 3. Get shopkeeper's order items
+      // --------------------------------
+      const itemsResult = await client.query(
+        `SELECT
+          oi.product_id,
+          oi.quantity,
+          p.stock,
+          p.name
+
+         FROM order_items oi
+
+         JOIN products p
+           ON oi.product_id = p.id
+
+         WHERE oi.order_id = $1
+         AND p.shopkeeper_id = $2
+
+         FOR UPDATE`,
+        [
+          orderId,
+          shopkeeperId,
+        ]
+      );
+
+      // --------------------------------
+      // 4. Restore stock
+      // --------------------------------
+      for (
+        const item of itemsResult.rows
+      ) {
+        await client.query(
+          `UPDATE products
+           SET
+             stock = stock + $1,
+             updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2`,
+          [
+            item.quantity,
+            item.product_id,
+          ]
+        );
+      }
+
+      // --------------------------------
+      // 5. Cancel order
+      // --------------------------------
+      const updateResult =
+        await client.query(
+          `UPDATE orders
+           SET
+             status = 'Cancelled',
+             updated_at = CURRENT_TIMESTAMP
+
+           WHERE id = $1
+
+           RETURNING *`,
+          [orderId]
+        );
+
+      // --------------------------------
+      // 6. Commit transaction
+      // --------------------------------
+      await client.query("COMMIT");
+
+      res.status(200).json({
+        message:
+          "Order cancelled and stock restored successfully",
+
+        order:
+          updateResult.rows[0],
+
+        restoredItems:
+          itemsResult.rows,
+      });
+
+    } catch (error) {
+      await client.query("ROLLBACK");
+
+      console.error(
+        "Shopkeeper cancel order error:",
+        error.message
+      );
+
+      res.status(500).json({
+        error:
+          "Failed to cancel order",
+      });
+
+    } finally {
+      client.release();
+    }
+  }
+);
+
+
+
+
+
+
+
+
+// see all orders for shopkeeper
+app.get(
+  "/shopkeeper/orders",
+  authenticateUser,
+  authorizeRoles("Shopkeeper"),
+  async (req, res) => {
+    try {
+      const shopkeeperId = req.user.id;
+
+      const page = Math.max(
+        Number(req.query.page) || 1,
+        1
+      );
+
+      const limit = 10;
+
+      const offset = (page - 1) * limit;
+
+      const search = (req.query.search || "").trim();
+
+      const status = (req.query.status || "").trim();
+
+      const searchValue = `%${search}%`;
+
+      // Count orders
+      const countResult = await db.query(
+        `SELECT COUNT(DISTINCT o.id) AS total_orders
+         FROM orders o
+         JOIN order_items oi
+           ON o.id = oi.order_id
+         JOIN products p
+           ON oi.product_id = p.id
+         JOIN users u
+           ON o.user_id = u.id
+         WHERE p.shopkeeper_id = $1
+         AND (
+           o.id::TEXT ILIKE $2
+           OR u.name ILIKE $2
+           OR u.email ILIKE $2
+         )
+         AND (
+           $3 = ''
+           OR o.status = $3
+         )`,
+        [
+          shopkeeperId,
+          searchValue,
+          status,
+        ]
+      );
+
+      const totalOrders = Number(
+        countResult.rows[0].total_orders
+      );
+
+      // Get orders
+      const result = await db.query(
+        `SELECT
+          o.id,
+          o.user_id,
+          u.name AS customer_name,
+          u.email AS customer_email,
+          o.total_amount,
+          o.status,
+          o.payment_method,
+          o.shipping_name,
+          o.shipping_phone,
+          o.shipping_address,
+          o.created_at,
+          o.updated_at
+         FROM orders o
+
+         JOIN users u
+           ON o.user_id = u.id
+
+         JOIN order_items oi
+           ON o.id = oi.order_id
+
+         JOIN products p
+           ON oi.product_id = p.id
+
+         WHERE p.shopkeeper_id = $1
+
+         AND (
+           o.id::TEXT ILIKE $2
+           OR u.name ILIKE $2
+           OR u.email ILIKE $2
+         )
+
+         AND (
+           $3 = ''
+           OR o.status = $3
+         )
+
+         GROUP BY
+           o.id,
+           u.name,
+           u.email
+
+         ORDER BY o.id DESC
+
+         LIMIT $4
+         OFFSET $5`,
+        [
+          shopkeeperId,
+          searchValue,
+          status,
+          limit,
+          offset,
+        ]
+      );
+
+      const totalPages = Math.ceil(
+        totalOrders / limit
+      );
+
+      res.status(200).json({
+        message: "Shopkeeper orders retrieved successfully",
+
+        totalOrders,
+
+        currentPage: page,
+
+        ordersPerPage: limit,
+
+        totalPages,
+
+        hasNextPage: page < totalPages,
+
+        hasPreviousPage: page > 1,
+
+        search,
+
+        status,
+
+        orders: result.rows,
+      });
+    } catch (error) {
+      console.error(
+        "Shopkeeper orders error:",
+        error.message
+      );
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+
+
+
+
+
 
 
 
