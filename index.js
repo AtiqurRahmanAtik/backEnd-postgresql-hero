@@ -221,6 +221,8 @@ app.delete("/users/:id", async(req,res)=>{
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
+  console.log("result : ", email)
+
   if (!email || !password) {
     return res.status(400).json({
       error: "Email and password are required",
@@ -243,6 +245,8 @@ app.post("/login", async (req, res) => {
     );
 
     const user = result.rows[0];
+
+    console.log("data : ", user)
 
     if (!user) {
       return res.status(401).json({
@@ -705,13 +709,32 @@ app.post(
 // ==========================================
 
 app.get(
-  "/shopkeeper/products",
-  authenticateUser,
-  authorizeRoles("Shopkeeper"),
+  "/products",
   async (req, res) => {
     try {
-      const shopkeeperId = req.user.id;
+      // Pagination
+      const page = Math.max(Number(req.query.page) || 1, 1);
+      const limit = 10;
+      const offset = (page - 1) * limit;
 
+      // Search
+      const search = (req.query.search || "").trim();
+      const searchValue = `%${search}%`;
+
+      // Get total products
+      const countResult = await db.query(
+        `SELECT COUNT(*)
+         FROM products
+         WHERE
+           name ILIKE $1
+           OR description ILIKE $1
+           OR category ILIKE $1`,
+        [searchValue]
+      );
+
+      const totalProducts = Number(countResult.rows[0].count);
+
+      // Get products
       const result = await db.query(
         `SELECT
           id,
@@ -725,17 +748,31 @@ app.get(
           created_at,
           updated_at
         FROM products
-        WHERE shopkeeper_id = $1
-        ORDER BY id DESC`,
-        [shopkeeperId]
+        WHERE
+          name ILIKE $1
+          OR description ILIKE $1
+          OR category ILIKE $1
+        ORDER BY id DESC
+        LIMIT $2
+        OFFSET $3`,
+        [searchValue, limit, offset]
       );
 
+      // Total pages
+      const totalPages = Math.ceil(totalProducts / limit);
+
       res.status(200).json({
-        totalProducts: result.rows.length,
+        totalProducts,
+        currentPage: page,
+        productsPerPage: limit,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1,
+        search,
         products: result.rows,
       });
     } catch (error) {
-      console.error("Get products error:", error.message);
+      console.error("Get all products error:", error.message);
 
       res.status(500).json({
         error: "Server Error",
@@ -751,12 +788,11 @@ app.get(
 // ==========================================
 
 app.get(
-  "/shopkeeper/products/:id",
-  authenticateUser,
-  authorizeRoles("Shopkeeper"),
+  "/products/:id",
   async (req, res) => {
     const productId = Number(req.params.id);
 
+    // Validate product ID
     if (!Number.isInteger(productId) || productId <= 0) {
       return res.status(400).json({
         error: "Invalid product ID",
@@ -764,8 +800,6 @@ app.get(
     }
 
     try {
-      const shopkeeperId = req.user.id;
-
       const result = await db.query(
         `SELECT
           id,
@@ -779,9 +813,8 @@ app.get(
           created_at,
           updated_at
         FROM products
-        WHERE id = $1
-        AND shopkeeper_id = $2`,
-        [productId, shopkeeperId]
+        WHERE id = $1`,
+        [productId]
       );
 
       if (result.rows.length === 0) {
@@ -804,6 +837,423 @@ app.get(
   }
 );
 
+
+
+
+// Addto Cart Products api
+app.post(
+  "/cart",
+  authenticateUser,
+  async (req, res) => {
+    const { productId, quantity } = req.body;
+
+    // Validate product ID
+    const parsedProductId = Number(productId);
+
+    if (!Number.isInteger(parsedProductId) || parsedProductId <= 0) {
+      return res.status(400).json({
+        error: "Invalid product ID",
+      });
+    }
+
+    // Validate quantity
+    const parsedQuantity = Number(quantity) || 1;
+
+    if (!Number.isInteger(parsedQuantity) || parsedQuantity <= 0) {
+      return res.status(400).json({
+        error: "Quantity must be a positive integer",
+      });
+    }
+
+    try {
+      const userId = req.user.id;
+
+      // Check product
+      const productResult = await db.query(
+        `SELECT
+          id,
+          name,
+          price,
+          stock,
+          image_url
+        FROM products
+        WHERE id = $1`,
+        [parsedProductId]
+      );
+
+      if (productResult.rows.length === 0) {
+        return res.status(404).json({
+          error: "Product not found",
+        });
+      }
+
+      const product = productResult.rows[0];
+
+      // Check stock
+      if (product.stock <= 0) {
+        return res.status(400).json({
+          error: "Product is out of stock",
+        });
+      }
+
+      if (parsedQuantity > product.stock) {
+        return res.status(400).json({
+          error: `Only ${product.stock} items available in stock`,
+        });
+      }
+
+      // Find user's cart
+      let cartResult = await db.query(
+        `SELECT id
+         FROM carts
+         WHERE user_id = $1`,
+        [userId]
+      );
+
+      let cartId;
+
+      // Create cart if it doesn't exist
+      if (cartResult.rows.length === 0) {
+        const newCart = await db.query(
+          `INSERT INTO carts (user_id)
+           VALUES ($1)
+           RETURNING id`,
+          [userId]
+        );
+
+        cartId = newCart.rows[0].id;
+      } else {
+        cartId = cartResult.rows[0].id;
+      }
+
+      // Check if product already exists in cart
+      const existingItem = await db.query(
+        `SELECT id, quantity
+         FROM cart_items
+         WHERE cart_id = $1
+         AND product_id = $2`,
+        [cartId, parsedProductId]
+      );
+
+      if (existingItem.rows.length > 0) {
+        const currentQuantity = existingItem.rows[0].quantity;
+        const newQuantity = currentQuantity + parsedQuantity;
+
+        // Check stock again
+        if (newQuantity > product.stock) {
+          return res.status(400).json({
+            error: `Only ${product.stock} items available in stock`,
+          });
+        }
+
+        const updatedItem = await db.query(
+          `UPDATE cart_items
+           SET
+             quantity = $1,
+             updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2
+           RETURNING *`,
+          [newQuantity, existingItem.rows[0].id]
+        );
+
+        return res.status(200).json({
+          message: "Product quantity updated in cart",
+          cartItem: updatedItem.rows[0],
+        });
+      }
+
+      // Add new product to cart
+      const result = await db.query(
+        `INSERT INTO cart_items
+          (cart_id, product_id, quantity)
+         VALUES ($1, $2, $3)
+         RETURNING *`,
+        [cartId, parsedProductId, parsedQuantity]
+      );
+
+      res.status(201).json({
+        message: "Product added to cart successfully",
+        cartItem: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Add to cart error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+// show all product cart
+app.get(
+  "/cart",
+  authenticateUser,
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+
+      const result = await db.query(
+        `SELECT
+          c.id AS cart_id,
+
+          ci.id AS cart_item_id,
+          ci.quantity,
+
+          p.id AS product_id,
+          p.name,
+          p.description,
+          p.price,
+          p.stock,
+          p.category,
+          p.image_url,
+
+          (p.price * ci.quantity) AS subtotal,
+
+          ci.created_at,
+          ci.updated_at
+
+        FROM carts c
+
+        LEFT JOIN cart_items ci
+          ON c.id = ci.cart_id
+
+        LEFT JOIN products p
+          ON ci.product_id = p.id
+
+        WHERE c.user_id = $1
+
+        ORDER BY ci.id DESC`,
+        [userId]
+      );
+
+      // User doesn't have a cart
+      if (result.rows.length === 0) {
+        return res.status(200).json({
+          message: "Your cart is empty",
+          totalItems: 0,
+          totalAmount: 0,
+          cart: [],
+        });
+      }
+
+      // Calculate total items
+      const totalItems = result.rows.reduce(
+        (total, item) => total + Number(item.quantity || 0),
+        0
+      );
+
+      // Calculate total amount
+      const totalAmount = result.rows.reduce(
+        (total, item) =>
+          total + Number(item.subtotal || 0),
+        0
+      );
+
+      res.status(200).json({
+        message: "Cart retrieved successfully",
+
+        cartId: result.rows[0].cart_id,
+
+        totalItems,
+
+        totalAmount: totalAmount.toFixed(2),
+
+        cart: result.rows,
+      });
+    } catch (error) {
+      console.error("Get cart error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+// update cart item + /-
+app.patch(
+  "/cart/:cartItemId",
+  authenticateUser,
+  async (req, res) => {
+    const cartItemId = Number(req.params.cartItemId);
+    const { quantity } = req.body;
+
+    if (!Number.isInteger(cartItemId) || cartItemId <= 0) {
+      return res.status(400).json({
+        error: "Invalid cart item ID",
+      });
+    }
+
+    const parsedQuantity = Number(quantity);
+
+    if (!Number.isInteger(parsedQuantity) || parsedQuantity <= 0) {
+      return res.status(400).json({
+        error: "Quantity must be a positive integer",
+      });
+    }
+
+    try {
+      const userId = req.user.id;
+
+      // Check cart item belongs to logged-in user
+      const itemResult = await db.query(
+        `SELECT
+          ci.id,
+          ci.product_id,
+          p.stock
+         FROM cart_items ci
+
+         JOIN carts c
+           ON ci.cart_id = c.id
+
+         JOIN products p
+           ON ci.product_id = p.id
+
+         WHERE ci.id = $1
+         AND c.user_id = $2`,
+        [cartItemId, userId]
+      );
+
+      if (itemResult.rows.length === 0) {
+        return res.status(404).json({
+          error: "Cart item not found",
+        });
+      }
+
+      const item = itemResult.rows[0];
+
+      // Check stock
+      if (parsedQuantity > item.stock) {
+        return res.status(400).json({
+          error: `Only ${item.stock} items available in stock`,
+        });
+      }
+
+      const result = await db.query(
+        `UPDATE cart_items
+         SET
+           quantity = $1,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2
+         RETURNING *`,
+        [parsedQuantity, cartItemId]
+      );
+
+      res.status(200).json({
+        message: "Cart quantity updated successfully",
+        cartItem: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Update cart error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+// Remove Product From Cart
+app.delete(
+  "/cart/:cartItemId",
+  authenticateUser,
+  async (req, res) => {
+    const cartItemId = Number(req.params.cartItemId);
+
+    if (!Number.isInteger(cartItemId) || cartItemId <= 0) {
+      return res.status(400).json({
+        error: "Invalid cart item ID",
+      });
+    }
+
+    try {
+      const userId = req.user.id;
+
+      const result = await db.query(
+        `DELETE FROM cart_items ci
+         USING carts c
+         WHERE ci.id = $1
+         AND ci.cart_id = c.id
+         AND c.user_id = $2
+         RETURNING
+           ci.id,
+           ci.product_id,
+           ci.quantity`,
+        [cartItemId, userId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          error: "Cart item not found",
+        });
+      }
+
+      res.status(200).json({
+        message: "Product removed from cart successfully",
+        removedItem: result.rows[0],
+      });
+    } catch (error) {
+      console.error("Remove cart item error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+
+// Clear Entire Cart
+
+app.delete(
+  "/cart",
+  authenticateUser,
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+
+      const result = await db.query(
+        `DELETE FROM cart_items
+         WHERE cart_id = (
+           SELECT id
+           FROM carts
+           WHERE user_id = $1
+         )
+         RETURNING id`,
+        [userId]
+      );
+
+      res.status(200).json({
+        message: "Cart cleared successfully",
+        deletedItems: result.rows.length,
+      });
+    } catch (error) {
+      console.error("Clear cart error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
+
+// 
+// Method	Endpoint	Purpose	Login
+// POST	/cart	Add product	✅
+// GET	/cart	Show user's cart	✅
+// PATCH	/cart/:cartItemId	Update quantity	✅
+// DELETE	/cart/:cartItemId	Remove item	✅
+// DELETE	/cart	Clear cart	✅
 
 
 
