@@ -11,10 +11,10 @@ const jwt = require("jsonwebtoken");
 
 
 
-
 const app = express();
-app.use(cookieParser());
 
+
+app.use(cookieParser());
 
 const port = process.env.PORT || 5000;
 
@@ -28,6 +28,37 @@ app.use(
 );
 
 // create users api here
+// middleware api
+
+
+app.get("/me", authenticateUser, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const result = await pool.query(
+      `SELECT id, name, email, role, photo
+       FROM users
+       WHERE id = $1`,
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: "User not found",
+      });
+    }
+
+    return res.status(200).json({
+      user: result.rows[0],
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      error: "Failed to fetch user",
+    });
+  }
+});
 
 
 
@@ -316,14 +347,20 @@ app.post("/login", async (req, res) => {
 app.post("/logout", (req, res) => {
   res.clearCookie("token", {
     httpOnly: true,
-    secure: false,
-    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  maxAge: 60 * 60 * 1000,
+    
+    
   });
 
   res.status(200).json({
     message: "Logout successful",
   });
 });
+
+
+
 
 // user Dashboard
 app.get(
@@ -564,10 +601,6 @@ app.patch(
 // ADMIN - DELETE USER
 // ==========================================
 
-// ==========================================
-// ADMIN - DELETE USER
-// ==========================================
-
 app.delete(
   "/admin/users/:id",
   authenticateUser,
@@ -633,6 +666,37 @@ app.delete(
 // ==========================================
 // SHOPKEEPER - CREATE PRODUCT
 // ==========================================
+
+
+// ==========================================
+// SHOPKEEPER - DASHBOARD
+// ==========================================
+
+app.get(
+  "/shopkeeper-dashboard",
+  authenticateUser,
+  authorizeRoles("Shopkeeper"),
+  async (req, res) => {
+    try {
+      res.status(200).json({
+        message: "Welcome to your Shopkeeper Dashboard",
+        user: {
+          id: req.user.id,
+          email: req.user.email,
+          role: req.user.role,
+        },
+      });
+    } catch (error) {
+      console.error("Shopkeeper dashboard error:", error.message);
+
+      res.status(500).json({
+        error: "Server Error",
+      });
+    }
+  }
+);
+
+
 
 app.post(
   "/shopkeeper/products",
