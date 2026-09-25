@@ -2,7 +2,7 @@ const authenticateUser = require("./middleware/auth");
 const authorizeRoles = require("./middleware/authorize");
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config()
+require('dotenv').config();
 const cookieParser = require("cookie-parser");
 const db = require("./db");
 const bcrypt = require("bcrypt");
@@ -131,7 +131,7 @@ app.get("/users", async(req,res)=>{
     });
   }
   
-})
+});
 
 
 
@@ -665,11 +665,6 @@ app.delete(
 // ShopKeeper Role
 // ==========================================
 // SHOPKEEPER - CREATE PRODUCT
-// ==========================================
-
-
-// ==========================================
-// SHOPKEEPER - DASHBOARD
 // ==========================================
 
 app.get(
